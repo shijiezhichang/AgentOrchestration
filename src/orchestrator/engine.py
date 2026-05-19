@@ -47,6 +47,43 @@ class OrchestrationEngine:
         agent_id = task["target_agent"]
         logger.info(f"Executing task {task_id} on agent {agent_id}")
 
+        # ── IDOR FIX: validate agent ownership, state, and existence ──
+        agent = self.registry.get(agent_id)
+        if not agent:
+            logger.error(f"Task {task_id}: agent {agent_id} not found")
+            for hook in self._hooks["on_error"]:
+                await hook(task, ValueError(f"Agent {agent_id} not found"))
+            return
+
+        # Reject tasks on non-runnable agents (terminal states)
+        terminal_states = {AgentStatus.STOPPED.value, AgentStatus.FAILED.value,
+                           AgentStatus.TERMINATED.value}
+        agent_status = agent.get("status", "")
+        if agent_status in terminal_states:
+            logger.error(
+                f"Task {task_id}: agent {agent_id} is {agent_status}, "
+                f"cannot execute"
+            )
+            for hook in self._hooks["on_error"]:
+                await hook(task, ValueError(
+                    f"Agent {agent_id} is {agent_status}, cannot run tasks"
+                ))
+            return
+
+        # Validate task ownership: task must carry an owner matching the agent
+        task_owner = task.get("owner", "")
+        agent_owner = agent.get("owner", "")
+        if agent_owner and task_owner != agent_owner:
+            logger.error(
+                f"Task {task_id}: owner mismatch — task owned by "
+                f"'{task_owner}' but agent belongs to '{agent_owner}'"
+            )
+            for hook in self._hooks["on_error"]:
+                await hook(task, PermissionError(
+                    f"Task owner '{task_owner}' not authorized for agent {agent_id}"
+                ))
+            return
+
         for hook in self._hooks["pre_execute"]:
             await hook(task)
 

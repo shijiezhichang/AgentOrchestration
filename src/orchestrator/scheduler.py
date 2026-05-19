@@ -3,6 +3,7 @@
 import asyncio
 import heapq
 import time
+from copy import deepcopy
 from typing import Any, Dict, Optional
 from uuid import uuid4
 
@@ -39,6 +40,7 @@ class TaskScheduler:
 
     def enqueue(self, task: Dict, queue: str = "default", priority: int = 0) -> str:
         task_id = str(uuid4())
+        task = deepcopy(task)  # isolate from caller's reference
         task["id"] = task_id
         task["enqueued_at"] = time.time()
         task["retries"] = 0
