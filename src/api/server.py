@@ -8,7 +8,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.trustedhost import TrustedHostMiddleware
 
 from .routes import router
-from .middleware import AuthMiddleware, RateLimitMiddleware, LoggingMiddleware
+from .middleware import AuthMiddleware, RateLimitMiddleware, LoggingMiddleware, BodyDecompressionMiddleware
 
 
 def create_app(config: Dict = None) -> FastAPI:
@@ -29,6 +29,9 @@ def create_app(config: Dict = None) -> FastAPI:
     )
 
     app.add_middleware(TrustedHostMiddleware, allowed_hosts=os.getenv("TRUSTED_HOSTS", "*").split(","))
+
+    # Body decompression must run first — before auth, rate limiting, etc.
+    app.add_middleware(BodyDecompressionMiddleware)
 
     app.add_middleware(AuthMiddleware)
     app.add_middleware(RateLimitMiddleware)

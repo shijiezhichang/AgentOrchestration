@@ -1,13 +1,96 @@
 """API middleware components."""
 
+import gzip
+import io
 import time
 import logging
-from typing import Callable
+from typing import Callable, Optional
+
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
-from starlette.responses import Response
+from starlette.responses import Response, JSONResponse
 
 logger = logging.getLogger(__name__)
+
+
+class GzipBombError(Exception):
+    """Raised when decompressed body exceeds the size limit."""
+    pass
+
+
+class BodyDecompressionMiddleware(BaseHTTPMiddleware):
+    """Decompresses gzip request bodies with bomb protection.
+
+    Reads the body in chunks, decompresses, and enforces a maximum
+    decompressed size to prevent gzip bomb attacks. State is cleared
+    in finally blocks to avoid cross-request leakage.
+    """
+
+    DEFAULT_MAX_SIZE = 10 * 1024 * 1024  # 10 MB
+
+    def __init__(self, app, max_decompressed_size: Optional[int] = None):
+        super().__init__(app)
+        self.max_size = max_decompressed_size or self.DEFAULT_MAX_SIZE
+
+    async def dispatch(self, request: Request, call_next: Callable) -> Response:
+        content_encoding = request.headers.get("Content-Encoding", "")
+        if "gzip" not in content_encoding.lower():
+            return await call_next(request)
+
+        raw_body = None
+        decompressed = None
+        try:
+            raw_body = await request.body()
+            decompressed = self._decompress_safe(raw_body)
+        except GzipBombError:
+            return JSONResponse(
+                status_code=413,
+                content={"detail": "Decompressed body exceeds size limit"},
+            )
+        except gzip.BadGzipFile:
+            return JSONResponse(
+                status_code=400,
+                content={"detail": "Invalid gzip data"},
+            )
+        except Exception:
+            logger.exception("Unexpected error during body decompression")
+            return JSONResponse(
+                status_code=500,
+                content={"detail": "Decompression error"},
+            )
+        finally:
+            # Clear request-local state to prevent cross-request leakage
+            raw_body = None
+
+        # Replace request body with decompressed content for downstream handlers
+        request._body = decompressed
+        try:
+            return await call_next(request)
+        finally:
+            decompressed = None
+
+    def _decompress_safe(self, data: bytes) -> bytes:
+        """Decompress gzip data with size tracking. Raises GzipBombError."""
+        buf = io.BytesIO()
+        total = 0
+        CHUNK = 64 * 1024  # 64 KB decompress chunks
+
+        try:
+            with gzip.GzipFile(fileobj=io.BytesIO(data), mode="rb") as gz:
+                while True:
+                    chunk = gz.read(CHUNK)
+                    if not chunk:
+                        break
+                    total += len(chunk)
+                    if total > self.max_size:
+                        raise GzipBombError(
+                            f"Decompressed size {total} exceeds limit {self.max_size}"
+                        )
+                    buf.write(chunk)
+        finally:
+            buf = None if total > self.max_size else buf
+
+        return buf.getvalue() if buf else b""
 
 
 class AuthMiddleware(BaseHTTPMiddleware):
