@@ -1,12 +1,41 @@
 """API route definitions."""
 
-from fastapi import APIRouter, HTTPException, Depends
+from fastapi import APIRouter, HTTPException, Depends, Request
 from typing import List, Dict, Optional
 
 from src.agent import AgentRegistry, AgentStatus
 
 router = APIRouter()
 registry = AgentRegistry()
+
+# In-memory run data store (scoped by workspace)
+_runs_store: Dict[str, List[Dict]] = {}
+
+
+async def get_current_workspace(request: Request) -> str:
+    """Dependency that returns the authenticated workspace_id."""
+    workspace_id = getattr(request.state, "workspace_id", None)
+    if not workspace_id:
+        raise HTTPException(status_code=403, detail="Workspace not resolved from token")
+    return workspace_id
+
+
+@router.post("/runs/search")
+async def run_search(
+    query: str,
+    workspace_id: str = Depends(get_current_workspace),
+):
+    """Search runs scoped to the caller's workspace."""
+    if not query or not query.strip():
+        raise HTTPException(status_code=400, detail="Query parameter is required")
+    runs = _runs_store.get(workspace_id, [])
+    # Simple substring match; in production this would use a search index
+    results = [
+        r for r in runs
+        if query.lower() in r.get("name", "").lower()
+        or query.lower() in r.get("id", "").lower()
+    ]
+    return {"workspace": workspace_id, "results": results, "total": len(results)}
 
 
 @router.get("/agents")

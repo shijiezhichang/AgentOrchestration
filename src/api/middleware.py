@@ -16,6 +16,17 @@ class AuthMiddleware(BaseHTTPMiddleware):
             token = request.headers.get("Authorization", "")
             if not token.startswith("Bearer "):
                 return Response(status_code=401, content="Unauthorized")
+
+            # Extract workspace_id and role from token
+            # Format: Bearer <token>:<workspace_id>:<role>
+            token_parts = token[len("Bearer "):].rsplit(":", 2)
+            if len(token_parts) == 3:
+                _, workspace_id, role = token_parts
+                request.state.workspace_id = workspace_id
+                request.state.role = role
+            else:
+                request.state.workspace_id = None
+                request.state.role = None
         return await call_next(request)
 
 
