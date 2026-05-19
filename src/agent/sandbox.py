@@ -3,15 +3,20 @@
 import os
 import tempfile
 import resource
-from typing import Dict, Optional
+from typing import Dict, Optional, Union
 from pathlib import Path
 
 
 class ResourceLimits:
-    def __init__(self, cpu_time: int = 60, memory_mb: int = 512, disk_mb: int = 100):
-        self.cpu_time = cpu_time
-        self.memory_mb = memory_mb
-        self.disk_mb = disk_mb
+    def __init__(self, cpu_time: Union[int, float] = 60, memory_mb: Union[int, float] = 512, disk_mb: Union[int, float] = 100):
+        for name, value in [("cpu_time", cpu_time), ("memory_mb", memory_mb), ("disk_mb", disk_mb)]:
+            if not isinstance(value, (int, float)):
+                raise ValueError(f"ResourceLimits.{name} must be numeric, got {type(value).__name__}")
+            if value <= 0:
+                raise ValueError(f"ResourceLimits.{name} must be positive, got {value}")
+        self.cpu_time = int(cpu_time)
+        self.memory_mb = int(memory_mb)
+        self.disk_mb = int(disk_mb)
 
 
 class AgentSandbox:
