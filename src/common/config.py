@@ -5,6 +5,11 @@ import json
 from typing import Any, Dict, Optional
 
 
+class ConfigError(Exception):
+    """Configuration-specific error."""
+    pass
+
+
 class Config:
     def __init__(self, config_path: Optional[str] = None):
         self._data: Dict[str, Any] = {}
@@ -26,11 +31,23 @@ class Config:
     def _set_nested(self, key: str, value: Any) -> None:
         parts = key.split(".")
         current = self._data
-        for part in parts[:-1]:
+        for i, part in enumerate(parts[:-1]):
             if part not in current:
                 current[part] = {}
+            elif not isinstance(current[part], dict):
+                raise ConfigError(
+                    f"Cannot merge '{key}': '{'.'.join(parts[:i+1])}' is a scalar "
+                    f"but '{parts[i+1]}' requires it to be a dict"
+                )
             current = current[part]
-        current[parts[-1]] = value
+        # Final part: prevent scalar from replacing an existing branch
+        final = parts[-1]
+        if final in current and isinstance(current[final], dict) and not isinstance(value, dict):
+            raise ConfigError(
+                f"Cannot set '{key}': '{final}' is a nested branch and cannot be "
+                f"replaced by a scalar value"
+            )
+        current[final] = value
 
     def get(self, key: str, default: Any = None) -> Any:
         parts = key.split(".")
