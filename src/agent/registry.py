@@ -16,11 +16,68 @@ class AgentStatus(Enum):
     TERMINATED = "terminated"
 
 
+class ResolutionError(Exception):
+    """Raised when a handler resolution is invalid."""
+    pass
+
+
+class ResolutionRecorder:
+    """Records handler resolutions and enforces mid-run invariants."""
+
+    def __init__(self):
+        self._resolutions: Dict[str, Dict[str, Any]] = {}
+        self._pinned: Dict[str, str] = {}  # task_id -> handler_id
+
+    def record(self, task_id: str, handler_id: str, agent_id: str) -> None:
+        """Record a handler resolution for a task. Rejects stale/duplicate mismatches."""
+        if task_id in self._pinned:
+            existing = self._pinned[task_id]
+            if existing != handler_id:
+                raise ResolutionError(
+                    f"Task {task_id} already pinned to handler {existing}, "
+                    f"cannot resolve to {handler_id}"
+                )
+        timestamp = time.time()
+        self._resolutions[task_id] = {
+            "task_id": task_id,
+            "handler_id": handler_id,
+            "agent_id": agent_id,
+            "resolved_at": timestamp,
+            "version": 1,
+        }
+        self._pinned[task_id] = handler_id
+
+    def is_pinned(self, task_id: str) -> bool:
+        """Check if a task has a pinned handler resolution."""
+        return task_id in self._pinned
+
+    def get_pinned_handler(self, task_id: str) -> Optional[str]:
+        """Get the pinned handler for a task, or None."""
+        return self._pinned.get(task_id)
+
+    def invalidate_for_agent(self, agent_id: str) -> int:
+        """Invalidate all cached resolutions for a given agent. Returns count."""
+        invalidated = 0
+        for task_id, resolution in list(self._resolutions.items()):
+            if resolution["agent_id"] == agent_id:
+                del self._resolutions[task_id]
+                self._pinned.pop(task_id, None)
+                invalidated += 1
+        return invalidated
+
+    def validate(self, task_id: str, handler_id: str) -> bool:
+        """Validate a handler resolution against the pinned record."""
+        if task_id not in self._pinned:
+            return False  # Not yet pinned
+        return self._pinned[task_id] == handler_id
+
+
 class AgentRegistry:
     def __init__(self, storage_backend: str = "memory"):
         self.storage_backend = storage_backend
         self._agents: Dict[str, Dict[str, Any]] = {}
         self._index: Dict[str, List[str]] = {}
+        self._recorder = ResolutionRecorder()
 
     def register(self, name: str, agent_type: str, config: Optional[Dict] = None) -> str:
         agent_id = str(uuid.uuid4())
@@ -57,8 +114,12 @@ class AgentRegistry:
     def update_status(self, agent_id: str, status: AgentStatus) -> bool:
         if agent_id not in self._agents:
             return False
+        old_status = self._agents[agent_id]["status"]
         self._agents[agent_id]["status"] = status.value
         self._agents[agent_id]["updated_at"] = time.time()
+        # Invalidate cached resolutions when agent becomes unavailable
+        if status in (AgentStatus.STOPPED, AgentStatus.FAILED, AgentStatus.TERMINATED):
+            self._recorder.invalidate_for_agent(agent_id)
         return True
 
     def delete(self, agent_id: str) -> bool:
@@ -68,10 +129,16 @@ class AgentRegistry:
         group = agent["type"].split(".")[0]
         if group in self._index and agent_id in self._index[group]:
             self._index[group].remove(agent_id)
+        self._recorder.invalidate_for_agent(agent_id)
         return True
 
     def count(self) -> int:
         return len(self._agents)
+
+    @property
+    def recorder(self) -> "ResolutionRecorder":
+        """Access the resolution recorder for testing/validation."""
+        return self._recorder
 
 # 2019-01-29T11:24:49 update
 
